@@ -1,0 +1,7 @@
+# BuildPlan Knowledge Tool V0.1 - Phase B dependencies
+# Python 3.12 required
+
+# DOCX parsing
+python-docx>=1.1.0
+
+# SQLite is built-in (no extra dependency needed)

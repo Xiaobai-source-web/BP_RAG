@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# BuildPlan runtime (user workspace data)
+.buildplan/
+*.db
+
+# Vector index / model cache
+*.index
+*.bin
+*.onnx
+models/
+cache/
+
+# Environment
+.env
+*.env
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Test fixtures - real enterprise documents (must be explicitly added)
+# tests/fixtures/*.docx
