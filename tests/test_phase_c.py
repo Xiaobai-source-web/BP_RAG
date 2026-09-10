@@ -304,9 +304,14 @@ def test_chunking_heading_context():
         assert len(overview_chunks) >= 1
         c = overview_chunks[0]
 
-        # embedding_text should have heading prefix
+        # embedding_text should have heading prefix in new format
         assert "工程概况" in c.embedding_text
-        assert c.embedding_text.startswith("[")
+        assert c.embedding_text.startswith("章节："), \
+            f"Expected '章节：' prefix, got: {c.embedding_text[:30]}"
+        # Verify full heading_path is in the prefix
+        for hp in c.heading_path:
+            assert hp in c.embedding_text.split("\n\n")[0], \
+                f"Heading '{hp}' not found in prefix"
         print(f"  [OK] Chunk under '工程概况' has heading prefix")
         print(f"    embedding_text starts: {c.embedding_text[:60]}...")
 
@@ -368,6 +373,145 @@ def test_chunking_long_document():
         # Each heading starts a new chunk; verify all chunks are non-empty
         assert all(s > 0 for s in sizes), "Some chunks are empty"
         print(f"  [OK] All {len(sizes)} text chunks are non-empty")
+
+
+def test_no_overlap_across_heading_boundaries():
+    """Heading boundary is a hard semantic boundary — no text carry-over."""
+    print("\n" + "=" * 60)
+    print("TEST: Chunking — No Overlap Across Heading Boundaries")
+    print("=" * 60)
+
+    parser = DocxParser()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        docx_path = Path(tmpdir) / "boundaries.docx"
+        doc = Document()
+        doc.add_heading("施工组织设计", level=1)
+        doc.add_paragraph("本工程为某住宅小区项目，总建筑面积约5万平方米。")
+        doc.add_heading("工程概况", level=2)
+        doc.add_paragraph("项目位于市中心区域，交通便利。")
+        doc.add_paragraph("总工期为305天。")
+        doc.add_heading("资源计划", level=2)
+        doc.add_paragraph("项目人力峰值为192人。")
+        doc.save(str(docx_path))
+
+        parsed = parser.parse(docx_path, "test-boundary")
+        parsed.relative_path = "boundaries.docx"
+
+        chunks = chunk_document(parsed, workspace_id="ws-test")
+
+        # Group chunks by heading_path
+        for i in range(1, len(chunks)):
+            prev_hp = chunks[i - 1].heading_path
+            curr_hp = chunks[i].heading_path
+            if prev_hp != curr_hp:
+                # Different heading_path: NO overlap allowed
+                prev_text = chunks[i - 1].text
+                curr_text = chunks[i].text
+                # Check that tail of prev does NOT appear in curr
+                check_len = min(80, len(prev_text))
+                check_segment = prev_text[-check_len:]
+                if check_segment:
+                    assert check_segment not in curr_text, \
+                        f"Overlap leaked across heading boundary: chunk[{i-1}] -> chunk[{i}]"
+                print(f"  [OK] chunk[{i-1}] -> chunk[{i}]: no cross-boundary overlap")
+                print(f"    hp[{i-1}]: {' > '.join(prev_hp)}")
+                print(f"    hp[{i}]:   {' > '.join(curr_hp)}")
+
+        print(f"  [OK] All heading boundaries are clean (0 cross-boundary overlap)")
+
+
+def test_overlap_within_long_same_section():
+    """Within the same heading, long sections get overlap between split chunks."""
+    print("\n" + "=" * 60)
+    print("TEST: Chunking — Overlap Within Same Long Section")
+    print("=" * 60)
+
+    parser = DocxParser()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        docx_path = Path(tmpdir) / "long_section.docx"
+        doc = Document()
+        doc.add_heading("长章节测试", level=1)
+        doc.add_heading("超长章节", level=2)
+        # Write enough text under one heading to exceed 2 * chunk_size (~1800 chars)
+        filler = "施工技术要求包括质量控制、安全管理、进度管理、成本管理等多个方面。"
+        for _ in range(25):
+            doc.add_paragraph(filler * 2)  # each ~500 chars
+        doc.save(str(docx_path))
+
+        parsed = parser.parse(docx_path, "test-long-section")
+        parsed.relative_path = "long_section.docx"
+
+        chunks = chunk_document(parsed, workspace_id="ws-test")
+
+        # All text chunks should share the same heading_path (no sub-headings)
+        text_chunks = [c for c in chunks if "|" not in c.text]
+        assert len(text_chunks) >= 2, \
+            f"Expected >=2 chunks from long section, got {len(text_chunks)}"
+
+        # Verify all text chunks have the same heading_path
+        for c in text_chunks:
+            assert c.heading_path == ["长章节测试", "超长章节"], \
+                f"Unexpected heading_path: {c.heading_path}"
+        print(f"  [OK] Long section produced {len(text_chunks)} chunks, all same heading_path")
+
+        # Find at least one pair with overlap
+        overlap_found = False
+        for i in range(1, len(text_chunks)):
+            prev_text = text_chunks[i - 1].text
+            curr_text = text_chunks[i].text
+            check_len = min(80, len(prev_text))
+            check_segment = prev_text[-check_len:]
+            if check_segment and check_segment in curr_text:
+                overlap_found = True
+                print(f"  [OK] Overlap detected: chunk[{i-1}] -> chunk[{i}]")
+                print(f"    Segment: ...{check_segment[:50]}...")
+                break
+
+        assert overlap_found, "No overlap found within split long section"
+
+
+def test_no_title_only_chunk_before_table():
+    """Heading immediately followed by Table should not produce a title-only chunk."""
+    print("\n" + "=" * 60)
+    print("TEST: Chunking — No Title-Only Chunk Before Table")
+    print("=" * 60)
+
+    parser = DocxParser()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        docx_path = Path(tmpdir) / "heading_table.docx"
+        doc = Document()
+        doc.add_heading("施工组织设计", level=1)
+        doc.add_heading("工期计划表", level=2)
+        # Table immediately follows heading — no paragraph in between
+        table = doc.add_table(rows=2, cols=2)
+        table.rows[0].cells[0].text = "项目"
+        table.rows[0].cells[1].text = "工期"
+        table.rows[1].cells[0].text = "基础"
+        table.rows[1].cells[1].text = "60天"
+        doc.save(str(docx_path))
+
+        parsed = parser.parse(docx_path, "test-heading-table")
+        parsed.relative_path = "heading_table.docx"
+
+        chunks = chunk_document(parsed, workspace_id="ws-test")
+
+        # Should NOT have a chunk that is just "工期计划表" with no table content
+        title_only = [
+            c for c in chunks
+            if c.text.strip() == "工期计划表"
+        ]
+        assert len(title_only) == 0, \
+            f"Found {len(title_only)} title-only chunk(s): {[c.text for c in title_only]}"
+
+        # The table chunk should exist and carry the heading_path
+        table_chunks = [c for c in chunks if "|" in c.text]
+        assert len(table_chunks) >= 1, "Expected at least 1 table chunk"
+        assert "工期计划表" in table_chunks[0].heading_path
+        print(f"  [OK] No title-only chunk before table")
+        print(f"  [OK] Table chunk heading_path: {' > '.join(table_chunks[0].heading_path)}")
 
 
 def test_chunking_empty_document():
@@ -506,6 +650,9 @@ def run_all_tests():
         test_chunking_heading_context,
         test_chunking_table_atomic,
         test_chunking_long_document,
+        test_no_overlap_across_heading_boundaries,
+        test_overlap_within_long_same_section,
+        test_no_title_only_chunk_before_table,
         test_chunking_empty_document,
         # Integration
         test_index_workspace_with_parsing,

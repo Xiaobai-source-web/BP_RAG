@@ -7,7 +7,9 @@
       "Bash(python scripts/index_demo.py ./test_workspace)",
       "Bash(python tests/test_phase_c.py)",
       "Bash(python -c ' *)",
-      "Bash(python tests/test_phase_b.py)"
+      "Bash(python tests/test_phase_b.py)",
+      "Bash(python -c \"from buildplan_knowledge.parsers.docx import DocxParser; print\\('docx.py OK'\\)\")",
+      "Bash(python -c \"from buildplan_knowledge.chunking import chunk_document; print\\('chunking OK'\\)\")"
     ]
   }
 }

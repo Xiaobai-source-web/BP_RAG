@@ -46,11 +46,14 @@ def _get_heading_level(paragraph: Paragraph) -> int | None:
         for prefix in _HEADING_STYLE_PREFIXES:
             if style_name.startswith(prefix):
                 # Extract level number after prefix
-                suffix = style_name[len(prefix):].strip()
-                if suffix and suffix[0].isdigit():
-                    level = int(suffix[0])
-                    if 1 <= level <= 9:
-                        return level
+                suffix = style_name[len(prefix):]
+                # Find the first digit in suffix (handles "Heading 2", "Heading2", etc.)
+                for ch in suffix:
+                    if ch.isdigit():
+                        level = int(ch)
+                        if 1 <= level <= 9:
+                            return level
+                        break
 
     # Check outline level from XML (more reliable for some documents)
     try:

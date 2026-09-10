@@ -3,10 +3,10 @@ BuildPlan Knowledge Tool — Document Chunking
 
 Splits ParsedDocument elements into Chunks for embedding.
 Strategy:
-  - Respects document structure (heading boundaries)
+  - Heading boundary is a hard semantic boundary — NO overlap across different heading_path
+  - Overlap only occurs within the same heading_path when a section exceeds target_chars
   - Tables are atomic (never split across chunks)
-  - Each chunk's embedding_text includes heading context
-  - Overlap between consecutive chunks for continuity
+  - embedding_text format: "章节：heading1 > heading2 > ...\n\n<text>"
 
 V0.1: Character-based size approximation (1 token ≈ 1.5 Chinese chars).
 """
@@ -28,11 +28,11 @@ def _make_heading_prefix(heading_path: list[str]) -> str:
     Build a context prefix from the heading path.
 
     Example: ["施工组织设计", "第一章 工程概况"]
-    → "[施工组织设计 > 第一章 工程概况] "
+    → "章节：施工组织设计 > 第一章 工程概况\n\n"
     """
     if not heading_path:
         return ""
-    return "[" + " > ".join(heading_path) + "] "
+    return "章节：" + " > ".join(heading_path) + "\n\n"
 
 
 @dataclass
@@ -40,7 +40,7 @@ class _ChunkBuffer:
     """Internal accumulator for building a single chunk."""
     elements_text: list[str]       # raw text of each element in this chunk
     heading_path: list[str]        # heading context for this chunk
-    is_table_chunk: bool = False   # True if this chunk is a single table
+    heading_only: bool = False     # True if buffer only contains a heading (no body yet)
 
     @property
     def total_chars(self) -> int:
@@ -51,7 +51,7 @@ class _ChunkBuffer:
         Return (text, embedding_text) for this buffer.
 
         - text: plain concatenated element texts
-        - embedding_text: heading prefix + concatenated text
+        - embedding_text: "章节：heading_path\n\n" + text
         """
         text = "\n".join(self.elements_text)
         prefix = _make_heading_prefix(self.heading_path)
@@ -68,6 +68,10 @@ def chunk_document(
     """
     Split a ParsedDocument into Chunks.
 
+    Overlap rules:
+      - Heading boundary = hard break, NO overlap across different heading_path
+      - Overlap only within same heading_path when section exceeds target_chars
+
     Args:
         parsed: Output from a parser (DocxParser, etc.).
         workspace_id: Workspace UUID for metadata.
@@ -83,8 +87,14 @@ def chunk_document(
     chunks: list[Chunk] = []
     buffer = _ChunkBuffer(elements_text=[], heading_path=[])
 
-    def flush_buffer() -> None:
-        """Finalize the current buffer into a Chunk."""
+    def flush_buffer(allow_overlap: bool = False) -> None:
+        """
+        Finalize the current buffer into a Chunk.
+
+        Args:
+            allow_overlap: If True, save tail text for the NEXT chunk.
+                           Only valid when the next chunk has the same heading_path.
+        """
         if not buffer.elements_text:
             return
         text, embedding_text = buffer.build_texts()
@@ -105,25 +115,35 @@ def chunk_document(
             ),
         )
         chunks.append(chunk)
-        buffer.elements_text.clear()
 
-    def get_overlap_text() -> str:
-        """Get the tail of the current buffer for overlap."""
-        if not buffer.elements_text:
-            return ""
-        full_text = "\n".join(buffer.elements_text)
-        if len(full_text) <= overlap_chars:
-            return full_text
-        return full_text[-overlap_chars:]
+        if allow_overlap:
+            # Keep tail for the next chunk (same heading_path only)
+            tail = _get_overlap_tail(buffer.elements_text, overlap_chars)
+            buffer.elements_text.clear()
+            if tail:
+                buffer.elements_text.append(tail)
+        else:
+            buffer.elements_text.clear()
+
+    def start_new_section(heading_path: list[str]) -> None:
+        """Start a fresh section with a new heading_path. No overlap carry-over."""
+        buffer.elements_text.clear()
+        buffer.heading_path = list(heading_path)
 
     for elem in parsed.elements:
         # ── Table: always atomic ────────────────────────────────────────
         if elem.element_type == ElementType.TABLE:
-            # Flush current buffer first
-            flush_buffer()
+            # If buffer only has a heading (no body text), skip the title-only chunk.
+            # The table chunk already carries the heading_path.
+            if buffer.heading_only:
+                buffer.elements_text.clear()
+                buffer.heading_only = False
+            else:
+                # Flush current section (no overlap — table is a boundary)
+                flush_buffer(allow_overlap=False)
 
-            # Tables go into their own chunk (never split)
-            text, embedding_text = _build_table_chunk_text(elem, parsed)
+            # Table gets its own chunk
+            text, embedding_text = _build_table_chunk_text(elem)
             chunk = Chunk(
                 chunk_id=str(uuid.uuid4()),
                 document_id=parsed.document_id,
@@ -142,17 +162,17 @@ def chunk_document(
             )
             chunks.append(chunk)
 
-            # Start fresh buffer after table
-            buffer.heading_path = list(elem.heading_path)
+            # Start fresh after table
+            start_new_section(elem.heading_path)
             continue
 
-        # ── Heading: may start a new chunk ──────────────────────────────
+        # ── Heading: hard semantic boundary ─────────────────────────────
         if elem.element_type == ElementType.HEADING:
-            # Flush if buffer is getting large
-            if buffer.total_chars > 0:
-                flush_buffer()
+            # Always flush with NO overlap — heading boundary is hard
+            flush_buffer(allow_overlap=False)
             buffer.heading_path = list(elem.heading_path)
             buffer.elements_text.append(elem.text)
+            buffer.heading_only = True   # mark: only heading so far, no body
             continue
 
         # ── Regular paragraph ───────────────────────────────────────────
@@ -160,39 +180,38 @@ def chunk_document(
         if not elem_text:
             continue
 
-        # Update heading path if it changed
+        # Heading_path changed — hard boundary, no overlap
         if elem.heading_path != buffer.heading_path:
-            # If buffer is non-empty and heading context changed, flush
-            if buffer.total_chars > 0:
-                flush_buffer()
-                # Apply overlap from previous chunk
-                overlap = get_overlap_text()
-                if overlap:
-                    buffer.elements_text.append(overlap)
+            flush_buffer(allow_overlap=False)
             buffer.heading_path = list(elem.heading_path)
 
-        # Check if adding this element would exceed target
+        # Exceeds target size — split within same section, allow overlap
         if buffer.total_chars + len(elem_text) > target_chars and buffer.total_chars > 0:
-            flush_buffer()
-            # Apply overlap
-            overlap = get_overlap_text()
-            if overlap:
-                buffer.elements_text.append(overlap)
-            buffer.heading_path = list(elem.heading_path)
+            flush_buffer(allow_overlap=True)
+            # heading_path stays the same (we're within the same section)
 
         buffer.elements_text.append(elem_text)
+        buffer.heading_only = False  # now has body content
 
-    # Flush remaining buffer
-    flush_buffer()
+    # Final flush — no overlap needed
+    flush_buffer(allow_overlap=False)
 
     logger.info(
-        "Chunked document %s: %d elements → %d chunks",
+        "Chunked document %s: %d elements -> %d chunks",
         parsed.file_name, len(parsed.elements), len(chunks),
     )
     return chunks
 
 
-def _build_table_chunk_text(elem: DocumentElement, parsed: ParsedDocument) -> tuple[str, str]:
+def _get_overlap_tail(elements_text: list[str], overlap_chars: int) -> str:
+    """Get the tail of the buffer text for overlap within the same section."""
+    full_text = "\n".join(elements_text)
+    if len(full_text) <= overlap_chars:
+        return full_text
+    return full_text[-overlap_chars:]
+
+
+def _build_table_chunk_text(elem: DocumentElement) -> tuple[str, str]:
     """Build text and embedding_text for a table chunk."""
     prefix = _make_heading_prefix(elem.heading_path)
     text = elem.text
