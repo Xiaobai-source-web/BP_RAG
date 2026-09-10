@@ -16,7 +16,9 @@ import logging
 from pathlib import Path
 
 from . import config
+from .chunking import chunk_document
 from .database import DatabaseManager
+from .parsers import get_parser
 from .schemas import (
     FileIndexStatus,
     FileStatus,
@@ -26,6 +28,32 @@ from .schemas import (
 from .workspace import WorkspaceScanner
 
 logger = logging.getLogger(__name__)
+
+
+# ── helpers ───────────────────────────────────────────────────────────────
+
+def _index_single_file(disc, ws_path: Path, db: DatabaseManager) -> int:
+    """
+    Parse and chunk a single file. Returns the chunk count.
+
+    Raises on parse/chunk failure so the caller can mark the file as failed.
+    """
+    parser = get_parser(disc.file_type)
+    if parser is None:
+        raise ValueError(f"No parser registered for {disc.file_type}")
+
+    # Parse
+    parsed = parser.parse(disc.absolute_path, disc.document_id)
+    parsed.relative_path = disc.relative_path
+
+    # Chunk
+    workspace_id = db.get_or_create_workspace_id()
+    chunks = chunk_document(parsed, workspace_id=workspace_id)
+
+    # Persist chunk count
+    db.mark_indexed(disc.relative_path, chunk_count=len(chunks))
+
+    return len(chunks)
 
 
 # ── index_workspace ───────────────────────────────────────────────────────
@@ -99,18 +127,28 @@ def index_workspace(workspace_path: str) -> IndexWorkspaceResult:
                 ))
                 logger.debug("Skipped (unchanged): %s", disc.relative_path)
             else:
-                # New or changed — will need full indexing (Phase C+)
-                # Phase B: scan-only, mark as indexed with chunk_count=0
-                # When parsers are implemented, parse→chunk→embed happens here
-                db.mark_indexed(disc.relative_path, chunk_count=0)
-                result.indexed += 1
-                result.files.append(FileStatus(
-                    relative_path=disc.relative_path,
-                    file_name=disc.file_name,
-                    status=FileIndexStatus.INDEXED,
-                    chunk_count=0,
-                ))
-                logger.info("Recorded: %s", disc.relative_path)
+                # New or changed — parse → chunk
+                try:
+                    chunk_count = _index_single_file(disc, ws_path, db)
+                    result.indexed += 1
+                    result.files.append(FileStatus(
+                        relative_path=disc.relative_path,
+                        file_name=disc.file_name,
+                        status=FileIndexStatus.INDEXED,
+                        chunk_count=chunk_count,
+                    ))
+                    result.total_chunks += chunk_count
+                    logger.info("Indexed: %s (%d chunks)", disc.relative_path, chunk_count)
+                except Exception as e:
+                    db.mark_failed(disc.relative_path, str(e))
+                    result.failed += 1
+                    result.files.append(FileStatus(
+                        relative_path=disc.relative_path,
+                        file_name=disc.file_name,
+                        status=FileIndexStatus.FAILED,
+                        error_message=str(e),
+                    ))
+                    logger.error("Failed to index %s: %s", disc.relative_path, e)
 
     logger.info("index_workspace complete: discovered=%d, indexed=%d, skipped=%d, failed=%d",
                 result.discovered, result.indexed, result.skipped, result.failed)
