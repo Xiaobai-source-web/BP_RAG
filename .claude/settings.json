@@ -4,7 +4,10 @@
       "Bash(python scripts/scan_demo.py ./test_workspace)",
       "Bash(pip show *)",
       "Bash(python scripts/parse_demo.py \"./test_workspace/扫描测试.docx\")",
-      "Bash(python scripts/index_demo.py ./test_workspace)"
+      "Bash(python scripts/index_demo.py ./test_workspace)",
+      "Bash(python tests/test_phase_c.py)",
+      "Bash(python -c ' *)",
+      "Bash(python tests/test_phase_b.py)"
     ]
   }
 }

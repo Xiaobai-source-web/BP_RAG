@@ -109,7 +109,7 @@ def test_workspace_scanner():
             assert f.file_size > 0, "file_size should be positive"
             assert f.file_type == ".docx"
 
-        print(f"  ✓ Discovered {len(discovered)} files")
+        print(f"  [OK] Discovered {len(discovered)} files")
         for f in discovered:
             print(f"    - {f.relative_path} ({f.file_size} bytes, hash={f.file_hash[:8]}...)")
 
@@ -129,19 +129,19 @@ def test_database_operations():
             ws_id = db.get_or_create_workspace_id()
             assert ws_id, "workspace_id should not be empty"
             assert len(ws_id) == 36, f"Expected UUID format, got: {ws_id}"
-            print(f"  ✓ workspace_id created: {ws_id}")
+            print(f"  [OK] workspace_id created: {ws_id}")
 
             # Test workspace ID persistence
             ws_id2 = db.get_or_create_workspace_id()
             assert ws_id == ws_id2, "workspace_id should be stable across calls"
-            print(f"  ✓ workspace_id is stable: {ws_id2}")
+            print(f"  [OK] workspace_id is stable: {ws_id2}")
 
             # Verify workspace.json was created
             meta_path = config.get_workspace_meta_path(ws)
             assert meta_path.exists(), "workspace.json should exist"
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             assert meta["workspace_id"] == ws_id
-            print(f"  ✓ workspace.json persisted correctly")
+            print(f"  [OK] workspace.json persisted correctly")
 
             # Test file upsert
             db.upsert_file(
@@ -157,7 +157,7 @@ def test_database_operations():
             assert f is not None
             assert f["document_id"] == "doc-001"
             assert f["indexed"] == 0
-            print(f"  ✓ File upsert works")
+            print(f"  [OK] File upsert works")
 
             # Test mark_indexed
             db.mark_indexed("test.docx", chunk_count=5)
@@ -165,32 +165,32 @@ def test_database_operations():
             assert f["indexed"] == 1
             assert f["chunk_count"] == 5
             assert f["indexed_at"] is not None
-            print(f"  ✓ mark_indexed works")
+            print(f"  [OK] mark_indexed works")
 
             # Test mark_skipped
             db.mark_skipped("test.docx")
             f = db.get_file_by_path("test.docx")
             assert f["indexed"] == 1
-            print(f"  ✓ mark_skipped works")
+            print(f"  [OK] mark_skipped works")
 
             # Test mark_failed
             db.mark_failed("test.docx", "parse error")
             f = db.get_file_by_path("test.docx")
             assert f["indexed"] == 0
             assert f["error_message"] == "parse error"
-            print(f"  ✓ mark_failed works")
+            print(f"  [OK] mark_failed works")
 
             # Test get_stats
             db.mark_indexed("test.docx", chunk_count=5)
             stats = db.get_stats()
             assert stats["total_files"] == 1
             assert stats["indexed_files"] == 1
-            print(f"  ✓ get_stats works: {stats}")
+            print(f"  [OK] get_stats works: {stats}")
 
             # Test delete_file
             db.delete_file("test.docx")
             assert db.get_file_by_path("test.docx") is None
-            print(f"  ✓ delete_file works")
+            print(f"  [OK] delete_file works")
 
 
 def test_index_workspace_api():
@@ -210,18 +210,18 @@ def test_index_workspace_api():
         assert result.skipped == 0
         assert result.failed == 0
         assert result.workspace_id, "workspace_id should be set"
-        print(f"  ✓ First index: discovered={result.discovered}, indexed={result.indexed}")
+        print(f"  [OK] First index: discovered={result.discovered}, indexed={result.indexed}")
 
         # Second index (unchanged files → all skipped)
         result2 = index_workspace(str(ws))
         assert result2.discovered == 3
         assert result2.indexed == 0
         assert result2.skipped == 3
-        print(f"  ✓ Second index (unchanged): skipped={result2.skipped}")
+        print(f"  [OK] Second index (unchanged): skipped={result2.skipped}")
 
         # Verify workspace_id is stable across calls
         assert result.workspace_id == result2.workspace_id
-        print(f"  ✓ workspace_id stable across index calls")
+        print(f"  [OK] workspace_id stable across index calls")
 
         # Modify one file and re-index
         create_dummy_docx(ws / "file1.docx", "MODIFIED content")
@@ -229,7 +229,7 @@ def test_index_workspace_api():
         assert result3.discovered == 3
         assert result3.indexed == 1  # file1 changed
         assert result3.skipped == 2  # file2, file3 unchanged
-        print(f"  ✓ After modify: indexed={result3.indexed}, skipped={result3.skipped}")
+        print(f"  [OK] After modify: indexed={result3.indexed}, skipped={result3.skipped}")
 
         # Delete one file and re-index
         (ws / "subdir" / "file3.docx").unlink()
@@ -238,7 +238,7 @@ def test_index_workspace_api():
         # file3 should be removed from DB
         status = get_index_status(str(ws))
         assert status["discovered_files"] == 2
-        print(f"  ✓ After delete: discovered={result4.discovered}, DB records={status['discovered_files']}")
+        print(f"  [OK] After delete: discovered={result4.discovered}, DB records={status['discovered_files']}")
 
 
 def test_get_index_status_api():
@@ -265,7 +265,7 @@ def test_get_index_status_api():
             assert f["status"] == "indexed"
             assert f["relative_path"]
 
-        print(f"  ✓ Status: {status['discovered_files']} files, {status['total_chunks']} chunks")
+        print(f"  [OK] Status: {status['discovered_files']} files, {status['total_chunks']} chunks")
         for f in status["files"]:
             print(f"    - {f['relative_path']}: {f['status']}")
 
@@ -285,7 +285,7 @@ def test_search_knowledge_stub():
         assert result.query == "test query"
         assert result.scope == "workspace"
         assert result.results == []
-        print(f"  ✓ search_knowledge returns empty result (stub)")
+        print(f"  [OK] search_knowledge returns empty result (stub)")
 
 
 def test_schema_dataclasses():
@@ -303,7 +303,7 @@ def test_schema_dataclasses():
     )
     assert elem.element_type == ElementType.HEADING
     assert elem.level == 1
-    print(f"  ✓ DocumentElement OK")
+    print(f"  [OK] DocumentElement OK")
 
     # ParsedDocument
     parsed = ParsedDocument(
@@ -314,7 +314,7 @@ def test_schema_dataclasses():
         elements=[elem],
     )
     assert len(parsed.elements) == 1
-    print(f"  ✓ ParsedDocument OK")
+    print(f"  [OK] ParsedDocument OK")
 
     # Chunk
     chunk = Chunk(
@@ -335,7 +335,7 @@ def test_schema_dataclasses():
     )
     assert chunk.text == "原始正文"
     assert "4 施工部署" in chunk.embedding_text
-    print(f"  ✓ Chunk OK")
+    print(f"  [OK] Chunk OK")
 
     # RetrievalResult
     ret = RetrievalResult(
@@ -357,7 +357,7 @@ def test_schema_dataclasses():
     )
     assert len(ret.results) == 1
     assert ret.results[0].score == 0.95
-    print(f"  ✓ RetrievalResult OK")
+    print(f"  [OK] RetrievalResult OK")
 
     # FileStatus
     fs = FileStatus(
@@ -367,7 +367,7 @@ def test_schema_dataclasses():
         chunk_count=10,
     )
     assert fs.status == FileIndexStatus.INDEXED
-    print(f"  ✓ FileStatus OK")
+    print(f"  [OK] FileStatus OK")
 
 
 def test_config_values():
@@ -385,7 +385,7 @@ def test_config_values():
     assert ".docx" in config.SUPPORTED_EXTENSIONS
     assert ".buildplan" in config.IGNORED_DIRS
     assert ".git" in config.IGNORED_DIRS
-    print(f"  ✓ All config values correct")
+    print(f"  [OK] All config values correct")
     print(f"    CHUNK_TARGET_TOKENS={config.CHUNK_TARGET_TOKENS}")
     print(f"    CHUNK_OVERLAP_TOKENS={config.CHUNK_OVERLAP_TOKENS}")
     print(f"    CHARS_PER_TOKEN={config.CHARS_PER_TOKEN}")
@@ -426,19 +426,19 @@ def test_buildplan_dir_structure():
         assert "files" in tables
         conn.close()
 
-        print(f"  ✓ .buildplan/ created at: {buildplan_dir}")
-        print(f"  ✓ project.db at: {db_path}")
-        print(f"  ✓ workspace.json at: {meta_path}")
-        print(f"  ✓ Tables in DB: {tables}")
+        print(f"  [OK] .buildplan/ created at: {buildplan_dir}")
+        print(f"  [OK] project.db at: {db_path}")
+        print(f"  [OK] workspace.json at: {meta_path}")
+        print(f"  [OK] Tables in DB: {tables}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def run_all_tests():
     """Run all Phase B tests."""
-    print("\n" + "█" * 60)
+    print("\n" + "#" * 60)
     print("  PHASE B TESTS — Schemas + SQLite + Workspace Scanner")
-    print("█" * 60)
+    print("#" * 60)
 
     tests = [
         test_config_values,
@@ -460,19 +460,19 @@ def run_all_tests():
             passed += 1
         except Exception as e:
             failed += 1
-            print(f"\n  ✗ FAILED: {test_fn.__name__}")
+            print(f"\n  [FAIL] FAILED: {test_fn.__name__}")
             print(f"    Error: {e}")
             import traceback
             traceback.print_exc()
 
-    print("\n" + "█" * 60)
+    print("\n" + "#" * 60)
     print(f"  RESULTS: {passed} passed, {failed} failed, {passed + failed} total")
-    print("█" * 60)
+    print("#" * 60)
 
     if failed > 0:
         sys.exit(1)
     else:
-        print("\n  ✅ All Phase B tests passed!")
+        print("\n  [OK] All Phase B tests passed!")
 
 
 if __name__ == "__main__":
